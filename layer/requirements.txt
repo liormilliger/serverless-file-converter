@@ -1,0 +1,14 @@
+# Lambda Layer dependencies — converter
+# Install with:
+#   pip install -r requirements.txt -t layer/python/ --platform mlinux_2_x86_64 --only-binary=:all:
+#
+# Note: pytesseract is a Python wrapper — the Tesseract *binary* must also
+# be present in the Lambda execution environment. The cleanest approach for
+# Lambda is to include a pre-compiled Tesseract binary in the layer under
+# layer/bin/tesseract and set PATH accordingly (see samconfig notes).
+
+pypdf>=4.0.0
+python-docx>=1.1.0
+Pillow>=10.0.0
+pytesseract>=0.3.10
+pdf2image>=1.17.0

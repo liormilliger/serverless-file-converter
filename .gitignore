@@ -1,0 +1,10 @@
+# SAM build artifacts
+.aws-sam/
+
+# Layer dependencies (rebuilt via pip install)
+layer/python/
+
+# Sensitive config — contains bucket names, owner info, stack names
+samconfig.toml
+
+PAT.txt
