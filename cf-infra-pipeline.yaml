@@ -67,7 +67,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub "${OwnerUser}-dispatcher"
-      CodeUri: ./src/
+      CodeUri: ./src/dispatcher.py
       Handler: dispatcher.handler
       Description: "Receives S3 events, deduplicates, invokes converter"
       Environment:
@@ -98,7 +98,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub "${OwnerUser}-converter"
-      CodeUri: ./src/
+      CodeUri: ./src/converter.py
       Handler: converter.handler
       Description: "Converts raw files to .txt and writes to structured bucket"
       Timeout: 300
