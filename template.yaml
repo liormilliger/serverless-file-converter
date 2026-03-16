@@ -1,0 +1,319 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: '3-tier-data-digestion: Validated Ingestion Pipeline (No Bedrock)'
+
+Resources:
+  # --- DynamoDB Table ---
+  ManifestTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: 3-tier-data-digestion-manifest
+      AttributeDefinitions:
+        - AttributeName: filename
+          AttributeType: S
+      KeySchema:
+        - AttributeName: filename
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+      Tags:
+        - Key: Name
+          Value: 3-tier-data-digestion
+        - Key: User
+          Value: liorm-at-polus
+
+  # --- Consolidated IAM Role for Lambdas ---
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: IngestionPermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:ListBucket, s3:GetBucketLocation]
+                Resource: 
+                  - "arn:aws:s3:::liorm-bronze-bucket"
+                  - "arn:aws:s3:::liorm-silver-bucket"
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:GetObjectTagging]
+                Resource: 
+                  - "arn:aws:s3:::liorm-bronze-bucket/*"
+                  - "arn:aws:s3:::liorm-silver-bucket/*"
+              - Effect: Allow
+                Action: [dynamodb:PutItem]
+                Resource: !GetAtt ManifestTable.Arn
+              - Effect: Allow
+                Action: [textract:DetectDocumentText]
+                Resource: "*"
+              - Effect: Allow
+                Action: 
+                  - textract:StartDocumentTextDetection
+                  - textract:GetDocumentTextDetection
+                Resource: "*"
+      Tags:
+        - Key: Name
+          Value: 3-tier-data-digestion
+        - Key: User
+          Value: liorm-at-polus
+
+  # --- 1. Identifier Lambda (S3 EventBridge Aware) ---
+  IdentifierLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: 3-tier-data-digestion-identifier
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.12
+      Architectures: [arm64]
+      Timeout: 30        # Increased from default 3s
+      Code:
+        ZipFile: |
+          import boto3, os
+          def lambda_handler(event, context):
+              s3 = boto3.client('s3')
+              # Extract from EventBridge 'detail' structure
+              detail = event.get('detail', {})
+              bucket = detail.get('bucket', {}).get('name')
+              key = detail.get('object', {}).get('key')
+              
+              if not bucket or not key:
+                  return {"error": "Invalid EventBridge structure", "event": event}
+
+              tagging = s3.get_object_tagging(Bucket=bucket, Key=key)
+              tags = {t['Key']: t['Value'] for t in tagging['TagSet']}
+              ext = os.path.splitext(key)[1].lower()
+              return {
+                  "bucket": bucket, "key": key, "extension": ext,
+                  "category": tags.get('Category', 'Unsorted'),
+                  "is_complex": ext in ['.pdf', '.docx', '.png', '.jpg']
+              }
+      Tags:
+        - Key: Name
+          Value: 3-tier-data-digestion
+        - Key: User
+          Value: liorm-at-polus
+
+  # --- 2. Converter Lambda (Simplified to Text-Only) ---
+  ConverterLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: 3-tier-data-digestion-converter
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.12
+      Architectures: [arm64]
+      Timeout: 60
+      MemorySize: 512
+      Code:
+        ZipFile: |
+          import boto3, time
+          def lambda_handler(event, context):
+              client = boto3.client('textract')
+              
+              # 1. Check if we are already in progress
+              if 'JobId' in event:
+                  response = client.get_document_text_detection(JobId=event['JobId'])
+                  status = response['JobStatus']
+                  
+                  if status == 'SUCCEEDED':
+                      text = ""
+                      # Note: For very large files, you'd need to handle NextToken pagination
+                      for block in response['Blocks']:
+                          if block['BlockType'] == 'LINE':
+                              text += block['Text'] + '\n'
+                      return {**event, "text_content": text, "JobStatus": status}
+                  return {**event, "JobStatus": status}
+
+              # 2. Handle Simple Files
+              if not event.get('is_complex'):
+                  s3 = boto3.client('s3')
+                  res = s3.get_object(Bucket=event['bucket'], Key=event['key'])
+                  return {**event, "text_content": res['Body'].read().decode('utf-8'), "JobStatus": "SUCCEEDED"}
+
+              # 3. Start Async Textract for Complex Files
+              response = client.start_document_text_detection(
+                  DocumentLocation={'S3Object': {'Bucket': event['bucket'], 'Name': event['key']}}
+              )
+              return {**event, "JobId": response['JobId'], "JobStatus": "IN_PROGRESS"}
+      Tags:
+        - Key: Name
+          Value: 3-tier-data-digestion
+        - Key: User
+          Value: liorm-at-polus
+
+  # --- 3. Uploader Lambda ---
+  UploaderLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: 3-tier-data-digestion-uploader
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.12
+      Architectures: [arm64]
+      Timeout: 30        # Increased from default 3s
+      MemorySize: 256    # Increased for faster SDK execution
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref ManifestTable
+          SILVER_BUCKET: "liorm-silver-bucket"
+      Code:
+        ZipFile: |
+          import boto3, os
+          def lambda_handler(event, context):
+              # Optimization: Move client initialization outside handler for better perf
+              s3 = boto3.client('s3')
+              db = boto3.resource('dynamodb')
+              table = db.Table(os.environ['TABLE_NAME'])
+              
+              # Ensure data exists from previous step
+              bucket = event.get('bucket')
+              key = event.get('key')
+              text_content = event.get('text_content', 'No content provided')
+              category = event.get('category', 'Unsorted')
+
+              new_key = f"{category}/{os.path.basename(key)}.txt"
+              
+              # 1. Upload to Silver
+              s3.put_object(
+                  Bucket=os.environ['SILVER_BUCKET'], 
+                  Key=new_key, 
+                  Body=text_content
+              )
+              
+              # 2. Update Manifest (DynamoDB)
+              table.put_item(Item={
+                  'filename': new_key,
+                  'description': text_content[:200],
+                  'location': f"s3://{os.environ['SILVER_BUCKET']}/{new_key}"
+              })
+              
+              return {"status": "success", "silver_path": new_key}
+      Tags:
+        - Key: Name
+          Value: 3-tier-data-digestion
+        - Key: User
+          Value: liorm-at-polus
+
+  # --- EventBridge to Step Function Bridge ---
+  S3TriggerRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: trigger-3-tier-pipeline
+      EventPattern:
+        source: ["aws.s3"]
+        detail-type: ["Object Created"]
+        detail:
+          bucket:
+            name: ["liorm-bronze-bucket"]
+      State: ENABLED
+      Targets:
+        - Arn: !Ref IngestionStateMachine
+          Id: "PipelineTarget"
+          RoleArn: !GetAtt EventBridgeToStepFunctionRole.Arn
+
+  EventBridgeToStepFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StartPipeline
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: !Ref IngestionStateMachine
+
+  # --- Step Functions ---
+  StateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: states.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SFNAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: 
+                  - !GetAtt IdentifierLambda.Arn
+                  - !GetAtt ConverterLambda.Arn
+                  - !GetAtt UploaderLambda.Arn
+      Tags:
+        - Key: Name
+          Value: 3-tier-data-digestion
+        - Key: User
+          Value: liorm-at-polus
+
+  IngestionStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: 3-tier-data-digestion-pipeline
+      DefinitionString: !Sub |-
+        {
+          "StartAt": "Identify",
+          "States": {
+            "Identify": {
+              "Type": "Task",
+              "Resource": "${IdentifierLambda.Arn}",
+              "Next": "ConvertOrStartAsync"
+            },
+            "ConvertOrStartAsync": {
+              "Type": "Task",
+              "Resource": "${ConverterLambda.Arn}",
+              "Next": "CheckComplexStatus"
+            },
+            "CheckComplexStatus": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.JobStatus",
+                  "StringEquals": "SUCCEEDED",
+                  "Next": "UploadAndManifest"
+                },
+                {
+                  "Variable": "$.JobStatus",
+                  "StringEquals": "IN_PROGRESS",
+                  "Next": "WaitForTextract"
+                }
+              ],
+              "Default": "UploadAndManifest"
+            },
+            "WaitForTextract": {
+              "Type": "Wait",
+              "Seconds": 5,
+              "Next": "ConvertOrStartAsync"
+            },
+            "UploadAndManifest": {
+              "Type": "Task",
+              "Resource": "${UploaderLambda.Arn}",
+              "End": true
+            }
+          }
+        }
+      RoleArn: !GetAtt StateMachineRole.Arn
+      Tags:
+        - Key: Name
+          Value: 3-tier-data-digestion
+        - Key: User
+          Value: liorm-at-polus
