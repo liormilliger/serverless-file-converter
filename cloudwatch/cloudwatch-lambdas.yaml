@@ -12,17 +12,17 @@ Parameters:
   AlertEmail:
     Type: String
     Description: Email address to receive CloudWatch alarm notifications
-    Default: ops-team@example.com
+    Default: lior.milliger@polustech.com
 
   LambdaFunctionNames:
     Type: CommaDelimitedList
     Description: Comma-separated list of Lambda function names to monitor
-    Default: my-lambda-1,my-lambda-2
+    Default: 3-tier-data-digestion-identifier,3-tier-data-digestion-converter,3-tier-data-digestion-uploader
 
   StepFunctionArns:
     Type: CommaDelimitedList
     Description: Comma-separated list of Step Function State Machine ARNs to monitor
-    Default: arn:aws:states:us-east-1:123456789012:stateMachine:MyStateMachine
+    Default: 3-tier-data-digestion-pipeline
 
   ErrorAlarmThreshold:
     Type: Number
@@ -32,7 +32,7 @@ Parameters:
   ThrottleAlarmThreshold:
     Type: Number
     Description: Number of Lambda throttles to trigger an alarm
-    Default: 5
+    Default: 3
 
   LogRetentionDays:
     Type: Number
@@ -198,8 +198,10 @@ Resources:
       LogGroupName: !Sub "/aws/lambda/observability-${Environment}"
       RetentionInDays: !Ref LogRetentionDays
       Tags:
-        Environment: !Ref Environment
-        ManagedBy: CloudFormation
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
 
   # ───────────────────────────────────────
   # CLOUDWATCH LOG GROUP — Step Functions
@@ -210,8 +212,10 @@ Resources:
       LogGroupName: !Sub "/aws/states/observability-${Environment}"
       RetentionInDays: !Ref LogRetentionDays
       Tags:
-        Environment: !Ref Environment
-        ManagedBy: CloudFormation
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
 
   # ───────────────────────────────────────
   # METRIC FILTER — Lambda ERROR pattern
@@ -328,6 +332,9 @@ Resources:
       EvaluationPeriods: 1
       Threshold: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: StateMachineArn
+          Value: !Select [0, !Ref StepFunctionArns]
       TreatMissingData: notBreaching
       AlarmActions:
         - !Ref AlertingSnsTopic
@@ -405,12 +412,12 @@ Resources:
               "properties": {
                 "title": "🚨 Active Alarms",
                 "alarms": [
-                  "${LambdaErrorAlarm.AlarmArn}",
-                  "${LambdaThrottleAlarm.AlarmArn}",
-                  "${LambdaDurationAlarm.AlarmArn}",
-                  "${StepFunctionFailedAlarm.AlarmArn}",
-                  "${StepFunctionTimedOutAlarm.AlarmArn}",
-                  "${StepFunctionThrottledAlarm.AlarmArn}"
+                  "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${LambdaErrorAlarm}",
+                  "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${LambdaThrottleAlarm}",
+                  "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${LambdaDurationAlarm}",
+                  "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${StepFunctionFailedAlarm}",
+                  "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${StepFunctionTimedOutAlarm}",
+                  "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:${StepFunctionThrottledAlarm}"
                 ]
               }
             },

@@ -19,6 +19,8 @@ Resources:
           Value: 3-tier-data-digestion
         - Key: User
           Value: liorm-at-polus
+        - Key: Monitoring
+          Value: True
 
   # --- Consolidated IAM Role for Lambdas ---
   LambdaExecutionRole:
@@ -64,6 +66,8 @@ Resources:
           Value: 3-tier-data-digestion
         - Key: User
           Value: liorm-at-polus
+        - Key: Monitoring
+          Value: True
 
   # --- 1. Identifier Lambda (S3 EventBridge Aware) ---
   IdentifierLambda:
@@ -101,6 +105,8 @@ Resources:
           Value: 3-tier-data-digestion
         - Key: User
           Value: liorm-at-polus
+        - Key: Monitoring
+          Value: True
 
   # --- 2. Converter Lambda (Simplified to Text-Only) ---
   ConverterLambda:
@@ -149,6 +155,8 @@ Resources:
           Value: 3-tier-data-digestion
         - Key: User
           Value: liorm-at-polus
+        - Key: Monitoring
+          Value: True
 
   # --- 3. Uploader Lambda (Markdown + Frontmatter Generation) ---
   UploaderLambda:
@@ -219,6 +227,8 @@ Resources:
           Value: 3-tier-data-digestion
         - Key: User
           Value: liorm-at-polus
+        - Key: Monitoring
+          Value: True
 
   # --- EventBridge to Step Function Bridge ---
   S3TriggerRule:
@@ -281,6 +291,8 @@ Resources:
           Value: 3-tier-data-digestion
         - Key: User
           Value: liorm-at-polus
+        - Key: Monitoring
+          Value: True
 
   IngestionStateMachine:
     Type: AWS::StepFunctions::StateMachine
@@ -334,3 +346,5 @@ Resources:
           Value: 3-tier-data-digestion
         - Key: User
           Value: liorm-at-polus
+        - Key: Monitoring
+          Value: True
