@@ -21,7 +21,7 @@ The pipeline is a four-state machine named `3-tier-data-digestion-pipeline`:
 
 ```
 Identify → ConvertOrStartAsync → CheckComplexStatus ──► UploadAndManifest
-                   ▲                      │
+                   ▲                       │
                    │    (IN_PROGRESS)      │
                    └──── WaitForTextract ◄─┘
 ```
