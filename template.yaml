@@ -150,7 +150,7 @@ Resources:
         - Key: User
           Value: liorm-at-polus
 
-  # --- 3. Uploader Lambda ---
+  # --- 3. Uploader Lambda (Markdown + Frontmatter Generation) ---
   UploaderLambda:
     Type: AWS::Lambda::Function
     Properties:
@@ -159,40 +159,57 @@ Resources:
       Role: !GetAtt LambdaExecutionRole.Arn
       Runtime: python3.12
       Architectures: [arm64]
-      Timeout: 30        # Increased from default 3s
-      MemorySize: 256    # Increased for faster SDK execution
+      Timeout: 30
+      MemorySize: 256
       Environment:
         Variables:
           TABLE_NAME: !Ref ManifestTable
           SILVER_BUCKET: "liorm-silver-bucket"
       Code:
         ZipFile: |
-          import boto3, os
+          import boto3, os, datetime
           def lambda_handler(event, context):
-              # Optimization: Move client initialization outside handler for better perf
               s3 = boto3.client('s3')
-              db = boto3.resource('dynamodb')
-              table = db.Table(os.environ['TABLE_NAME'])
+              table = boto3.resource('dynamodb').Table(os.environ['TABLE_NAME'])
               
-              # Ensure data exists from previous step
-              bucket = event.get('bucket')
               key = event.get('key')
               text_content = event.get('text_content', 'No content provided')
               category = event.get('category', 'Unsorted')
 
-              new_key = f"{category}/{os.path.basename(key)}.txt"
+              # 1. Frontmatter Generation 
+              # Extract first line as a potential title, or fallback to filename
+              first_line = text_content.strip().split('\n')[0][:100]
+              title = first_line.replace('#', '').strip() if first_line else os.path.basename(key)
               
-              # 1. Upload to Silver
+              date_str = datetime.datetime.now().strftime("%Y-%m-%d")
+              
+              frontmatter = (
+                  "---\n"
+                  f"title: \"{title}\"\n"
+                  f"audience: [developer, customer]\n"
+                  f"topic: [{category.lower()}]\n"
+                  f"last_updated: {date_str}\n"
+                  "status: verified\n"
+                  "---\n\n"
+              )
+              
+              final_md_content = frontmatter + text_content
+
+              # 2. Path Mapping [cite: 144, 147]
+              base_name = os.path.splitext(os.path.basename(key))[0]
+              new_key = f"{category}/{base_name}.md"
+              
+              # 3. Upload to Silver
               s3.put_object(
                   Bucket=os.environ['SILVER_BUCKET'], 
                   Key=new_key, 
-                  Body=text_content
+                  Body=final_md_content
               )
               
-              # 2. Update Manifest (DynamoDB)
+              # 4. Update Manifest (DynamoDB)
               table.put_item(Item={
                   'filename': new_key,
-                  'description': text_content[:200],
+                  'description': f"Markdown document: {title[:150]}",
                   'location': f"s3://{os.environ['SILVER_BUCKET']}/{new_key}"
               })
               
