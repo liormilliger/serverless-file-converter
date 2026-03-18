@@ -8,7 +8,6 @@ Description: >
 # PARAMETERS
 # ─────────────────────────────────────────
 Parameters:
-
   AlertEmail:
     Type: String
     Description: Email address to receive CloudWatch alarm notifications
@@ -22,7 +21,7 @@ Parameters:
   StepFunctionArns:
     Type: CommaDelimitedList
     Description: Comma-separated list of Step Function State Machine ARNs to monitor
-    Default: 3-tier-data-digestion-pipeline
+    Default: arn:aws:states:us-east-1:704505749045:stateMachine:3-tier-data-digestion-pipeline
 
   ErrorAlarmThreshold:
     Type: Number
@@ -43,7 +42,7 @@ Parameters:
   Environment:
     Type: String
     Description: Deployment environment
-    Default: production
+    Default: development
     AllowedValues: [development, staging, production]
 
 # ─────────────────────────────────────────
@@ -73,9 +72,7 @@ Resources:
       Endpoint: !Ref AlertEmail
 
   # ───────────────────────────────────────
-  # IAM ROLE — Lambda Execution Role
-  # Grants Lambdas permission to write logs,
-  # publish X-Ray traces, and publish metrics
+  # IAM ROLES
   # ───────────────────────────────────────
   LambdaObservabilityRole:
     Type: AWS::IAM::Role
@@ -114,14 +111,7 @@ Resources:
       Tags:
         - Key: Environment
           Value: !Ref Environment
-        - Key: ManagedBy
-          Value: CloudFormation
 
-  # ───────────────────────────────────────
-  # IAM ROLE — Step Functions Execution Role
-  # Grants Step Functions permission to write
-  # logs and publish X-Ray traces
-  # ───────────────────────────────────────
   StepFunctionsObservabilityRole:
     Type: AWS::IAM::Role
     Properties:
@@ -153,22 +143,10 @@ Resources:
                   - logs:DescribeResourcePolicies
                   - logs:DescribeLogGroups
                 Resource: "*"
-              - Sid: StepFunctionsMetrics
-                Effect: Allow
-                Action:
-                  - cloudwatch:PutMetricData
-                Resource: "*"
       Tags:
         - Key: Environment
           Value: !Ref Environment
-        - Key: ManagedBy
-          Value: CloudFormation
 
-  # ───────────────────────────────────────
-  # IAM ROLE — CloudWatch Dashboard & Alarms
-  # Read-only access for viewing dashboards
-  # and describing alarms (for ops/dev teams)
-  # ───────────────────────────────────────
   CloudWatchReadOnlyRole:
     Type: AWS::IAM::Role
     Properties:
@@ -186,11 +164,9 @@ Resources:
       Tags:
         - Key: Environment
           Value: !Ref Environment
-        - Key: ManagedBy
-          Value: CloudFormation
 
   # ───────────────────────────────────────
-  # CLOUDWATCH LOG GROUP — Lambda
+  # LOG GROUPS
   # ───────────────────────────────────────
   LambdaLogGroup:
     Type: AWS::Logs::LogGroup
@@ -200,12 +176,7 @@ Resources:
       Tags:
         - Key: Environment
           Value: !Ref Environment
-        - Key: ManagedBy
-          Value: CloudFormation
 
-  # ───────────────────────────────────────
-  # CLOUDWATCH LOG GROUP — Step Functions
-  # ───────────────────────────────────────
   StepFunctionsLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -214,13 +185,9 @@ Resources:
       Tags:
         - Key: Environment
           Value: !Ref Environment
-        - Key: ManagedBy
-          Value: CloudFormation
 
   # ───────────────────────────────────────
-  # METRIC FILTER — Lambda ERROR pattern
-  # Scans logs for "ERROR" keyword and
-  # increments a custom metric counter
+  # METRIC FILTERS
   # ───────────────────────────────────────
   LambdaErrorMetricFilter:
     Type: AWS::Logs::MetricFilter
@@ -232,11 +199,7 @@ Resources:
           MetricNamespace: !Sub "Custom/Lambda/${Environment}"
           MetricValue: "1"
           DefaultValue: 0
-          Unit: Count
 
-  # ───────────────────────────────────────
-  # METRIC FILTER — Lambda TIMEOUT pattern
-  # ───────────────────────────────────────
   LambdaTimeoutMetricFilter:
     Type: AWS::Logs::MetricFilter
     Properties:
@@ -247,16 +210,14 @@ Resources:
           MetricNamespace: !Sub "Custom/Lambda/${Environment}"
           MetricValue: "1"
           DefaultValue: 0
-          Unit: Count
 
   # ───────────────────────────────────────
-  # CLOUDWATCH ALARM — Lambda Errors
+  # CLOUDWATCH ALARMS
   # ───────────────────────────────────────
   LambdaErrorAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub "Lambda-Errors-${Environment}"
-      AlarmDescription: "Triggers when Lambda error count exceeds threshold"
       Namespace: AWS/Lambda
       MetricName: Errors
       Statistic: Sum
@@ -265,22 +226,12 @@ Resources:
       Threshold: !Ref ErrorAlarmThreshold
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
-      AlarmActions:
-        - !Ref AlertingSnsTopic
-      OKActions:
-        - !Ref AlertingSnsTopic
-      Tags:
-        - Key: Environment
-          Value: !Ref Environment
+      AlarmActions: [!Ref AlertingSnsTopic]
 
-  # ───────────────────────────────────────
-  # CLOUDWATCH ALARM — Lambda Throttles
-  # ───────────────────────────────────────
   LambdaThrottleAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub "Lambda-Throttles-${Environment}"
-      AlarmDescription: "Triggers when Lambda throttle count exceeds threshold"
       Namespace: AWS/Lambda
       MetricName: Throttles
       Statistic: Sum
@@ -288,21 +239,12 @@ Resources:
       EvaluationPeriods: 1
       Threshold: !Ref ThrottleAlarmThreshold
       ComparisonOperator: GreaterThanOrEqualToThreshold
-      TreatMissingData: notBreaching
-      AlarmActions:
-        - !Ref AlertingSnsTopic
-      Tags:
-        - Key: Environment
-          Value: !Ref Environment
+      AlarmActions: [!Ref AlertingSnsTopic]
 
-  # ───────────────────────────────────────
-  # CLOUDWATCH ALARM — Lambda Duration (P99)
-  # ───────────────────────────────────────
   LambdaDurationAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub "Lambda-HighDuration-${Environment}"
-      AlarmDescription: "Triggers when Lambda p99 duration exceeds 10 seconds"
       Namespace: AWS/Lambda
       MetricName: Duration
       ExtendedStatistic: p99
@@ -310,21 +252,12 @@ Resources:
       EvaluationPeriods: 2
       Threshold: 10000
       ComparisonOperator: GreaterThanThreshold
-      TreatMissingData: notBreaching
-      AlarmActions:
-        - !Ref AlertingSnsTopic
-      Tags:
-        - Key: Environment
-          Value: !Ref Environment
+      AlarmActions: [!Ref AlertingSnsTopic]
 
-  # ───────────────────────────────────────
-  # CLOUDWATCH ALARM — Step Functions Failed
-  # ───────────────────────────────────────
   StepFunctionFailedAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub "StepFunctions-ExecutionsFailed-${Environment}"
-      AlarmDescription: "Triggers when any Step Function execution fails"
       Namespace: AWS/States
       MetricName: ExecutionsFailed
       Statistic: Sum
@@ -335,23 +268,12 @@ Resources:
       Dimensions:
         - Name: StateMachineArn
           Value: !Select [0, !Ref StepFunctionArns]
-      TreatMissingData: notBreaching
-      AlarmActions:
-        - !Ref AlertingSnsTopic
-      OKActions:
-        - !Ref AlertingSnsTopic
-      Tags:
-        - Key: Environment
-          Value: !Ref Environment
+      AlarmActions: [!Ref AlertingSnsTopic]
 
-  # ───────────────────────────────────────
-  # CLOUDWATCH ALARM — Step Functions Timed Out
-  # ───────────────────────────────────────
   StepFunctionTimedOutAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub "StepFunctions-ExecutionsTimedOut-${Environment}"
-      AlarmDescription: "Triggers when a Step Function execution times out"
       Namespace: AWS/States
       MetricName: ExecutionsTimedOut
       Statistic: Sum
@@ -359,21 +281,15 @@ Resources:
       EvaluationPeriods: 1
       Threshold: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
-      TreatMissingData: notBreaching
-      AlarmActions:
-        - !Ref AlertingSnsTopic
-      Tags:
-        - Key: Environment
-          Value: !Ref Environment
+      Dimensions:
+        - Name: StateMachineArn
+          Value: !Select [0, !Ref StepFunctionArns]
+      AlarmActions: [!Ref AlertingSnsTopic]
 
-  # ───────────────────────────────────────
-  # CLOUDWATCH ALARM — Step Functions Throttled
-  # ───────────────────────────────────────
   StepFunctionThrottledAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub "StepFunctions-ExecutionsThrottled-${Environment}"
-      AlarmDescription: "Triggers when Step Function executions are throttled"
       Namespace: AWS/States
       MetricName: ExecutionsThrottled
       Statistic: Sum
@@ -381,16 +297,13 @@ Resources:
       EvaluationPeriods: 1
       Threshold: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
-      TreatMissingData: notBreaching
-      AlarmActions:
-        - !Ref AlertingSnsTopic
-      Tags:
-        - Key: Environment
-          Value: !Ref Environment
+      Dimensions:
+        - Name: StateMachineArn
+          Value: !Select [0, !Ref StepFunctionArns]
+      AlarmActions: [!Ref AlertingSnsTopic]
 
   # ───────────────────────────────────────
   # CLOUDWATCH DASHBOARD
-  # Centralized view: Lambda + Step Functions
   # ───────────────────────────────────────
   ObservabilityDashboard:
     Type: AWS::CloudWatch::Dashboard
@@ -425,13 +338,12 @@ Resources:
               "type": "metric",
               "x": 0, "y": 3, "width": 8, "height": 6,
               "properties": {
+                "region": "${AWS::Region}",
                 "title": "Lambda — Invocations",
                 "view": "timeSeries",
                 "stat": "Sum",
                 "period": 60,
-                "metrics": [
-                  ["AWS/Lambda", "Invocations"]
-                ],
+                "metrics": [ ["AWS/Lambda", "Invocations"] ],
                 "yAxis": { "left": { "min": 0 } }
               }
             },
@@ -439,13 +351,12 @@ Resources:
               "type": "metric",
               "x": 8, "y": 3, "width": 8, "height": 6,
               "properties": {
+                "region": "${AWS::Region}",
                 "title": "Lambda — Errors",
                 "view": "timeSeries",
                 "stat": "Sum",
                 "period": 60,
-                "metrics": [
-                  ["AWS/Lambda", "Errors", { "color": "#d62728" }]
-                ],
+                "metrics": [ ["AWS/Lambda", "Errors", { "color": "#d62728" }] ],
                 "yAxis": { "left": { "min": 0 } }
               }
             },
@@ -453,13 +364,12 @@ Resources:
               "type": "metric",
               "x": 16, "y": 3, "width": 8, "height": 6,
               "properties": {
+                "region": "${AWS::Region}",
                 "title": "Lambda — Throttles",
                 "view": "timeSeries",
                 "stat": "Sum",
                 "period": 60,
-                "metrics": [
-                  ["AWS/Lambda", "Throttles", { "color": "#ff7f0e" }]
-                ],
+                "metrics": [ ["AWS/Lambda", "Throttles", { "color": "#ff7f0e" }] ],
                 "yAxis": { "left": { "min": 0 } }
               }
             },
@@ -467,134 +377,55 @@ Resources:
               "type": "metric",
               "x": 0, "y": 9, "width": 12, "height": 6,
               "properties": {
+                "region": "${AWS::Region}",
                 "title": "Lambda — Duration (Avg / P99)",
                 "view": "timeSeries",
                 "stat": "Average",
                 "period": 60,
                 "metrics": [
-                  ["AWS/Lambda", "Duration", { "label": "Avg Duration", "stat": "Average" }],
+                  ["AWS/Lambda", "Duration", { "label": "Avg Duration" }],
                   ["AWS/Lambda", "Duration", { "label": "p99 Duration", "stat": "p99", "color": "#9467bd" }]
-                ],
-                "yAxis": { "left": { "min": 0, "label": "ms" } }
+                ]
               }
             },
             {
               "type": "metric",
               "x": 12, "y": 9, "width": 12, "height": 6,
               "properties": {
+                "region": "${AWS::Region}",
                 "title": "Lambda — Concurrent Executions",
                 "view": "timeSeries",
                 "stat": "Maximum",
                 "period": 60,
-                "metrics": [
-                  ["AWS/Lambda", "ConcurrentExecutions"]
-                ],
-                "yAxis": { "left": { "min": 0 } }
+                "metrics": [ ["AWS/Lambda", "ConcurrentExecutions"] ]
               }
             },
             {
               "type": "text",
               "x": 0, "y": 15, "width": 24, "height": 1,
-              "properties": {
-                "markdown": "## ⚙️ Step Functions"
-              }
+              "properties": { "markdown": "## ⚙️ Step Functions" }
             },
             {
               "type": "metric",
-              "x": 0, "y": 16, "width": 6, "height": 6,
+              "x": 0, "y": 16, "width": 8, "height": 6,
               "properties": {
-                "title": "Step Functions — Executions Started",
+                "region": "${AWS::Region}",
+                "title": "Step Functions — Success/Failure",
                 "view": "timeSeries",
-                "stat": "Sum",
-                "period": 60,
                 "metrics": [
-                  ["AWS/States", "ExecutionsStarted"]
+                  ["AWS/States", "ExecutionsSucceeded", { "color": "#2ca02c" }],
+                  ["AWS/States", "ExecutionsFailed", { "color": "#d62728" }]
                 ]
-              }
-            },
-            {
-              "type": "metric",
-              "x": 6, "y": 16, "width": 6, "height": 6,
-              "properties": {
-                "title": "Step Functions — Executions Succeeded",
-                "view": "timeSeries",
-                "stat": "Sum",
-                "period": 60,
-                "metrics": [
-                  ["AWS/States", "ExecutionsSucceeded", { "color": "#2ca02c" }]
-                ]
-              }
-            },
-            {
-              "type": "metric",
-              "x": 12, "y": 16, "width": 6, "height": 6,
-              "properties": {
-                "title": "Step Functions — Executions Failed",
-                "view": "timeSeries",
-                "stat": "Sum",
-                "period": 60,
-                "metrics": [
-                  ["AWS/States", "ExecutionsFailed", { "color": "#d62728" }],
-                  ["AWS/States", "ExecutionsTimedOut", { "color": "#ff7f0e" }],
-                  ["AWS/States", "ExecutionsThrottled", { "color": "#8c564b" }]
-                ]
-              }
-            },
-            {
-              "type": "metric",
-              "x": 18, "y": 16, "width": 6, "height": 6,
-              "properties": {
-                "title": "Step Functions — Execution Duration",
-                "view": "timeSeries",
-                "stat": "Average",
-                "period": 60,
-                "metrics": [
-                  ["AWS/States", "ExecutionTime"]
-                ],
-                "yAxis": { "left": { "label": "ms" } }
-              }
-            },
-            {
-              "type": "text",
-              "x": 0, "y": 22, "width": 24, "height": 1,
-              "properties": {
-                "markdown": "## 📋 Log Insights"
               }
             },
             {
               "type": "log",
-              "x": 0, "y": 23, "width": 24, "height": 6,
+              "x": 0, "y": 22, "width": 24, "height": 6,
               "properties": {
                 "title": "Lambda — Recent Errors",
-                "query": "SOURCE '/aws/lambda/observability-${Environment}' | fields @timestamp, @message | filter @message like /ERROR|Exception|exception/ | sort @timestamp desc | limit 50",
+                "query": "SOURCE '/aws/lambda/observability-${Environment}' | fields @timestamp, @message | filter @message like /ERROR|Exception/ | sort @timestamp desc | limit 20",
                 "region": "${AWS::Region}",
                 "view": "table"
-              }
-            },
-            {
-              "type": "metric",
-              "x": 0, "y": 29, "width": 12, "height": 6,
-              "properties": {
-                "title": "Custom — Application Errors (from Log Filter)",
-                "view": "timeSeries",
-                "stat": "Sum",
-                "period": 60,
-                "metrics": [
-                  ["Custom/Lambda/${Environment}", "LambdaApplicationErrors", { "color": "#d62728" }]
-                ]
-              }
-            },
-            {
-              "type": "metric",
-              "x": 12, "y": 29, "width": 12, "height": 6,
-              "properties": {
-                "title": "Custom — Lambda Timeouts (from Log Filter)",
-                "view": "timeSeries",
-                "stat": "Sum",
-                "period": 60,
-                "metrics": [
-                  ["Custom/Lambda/${Environment}", "LambdaTimeouts", { "color": "#ff7f0e" }]
-                ]
               }
             }
           ]
@@ -604,39 +435,12 @@ Resources:
 # OUTPUTS
 # ─────────────────────────────────────────
 Outputs:
-
   DashboardUrl:
     Description: URL to the CloudWatch Observability Dashboard
     Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=CloudWatch-Lambdas-${Environment}"
-    Export:
-      Name: !Sub "${AWS::StackName}-DashboardUrl"
-
-  AlertingSnsTopicArn:
-    Description: ARN of the SNS topic for alerts
-    Value: !Ref AlertingSnsTopic
-    Export:
-      Name: !Sub "${AWS::StackName}-AlertingSnsTopicArn"
-
   LambdaObservabilityRoleArn:
-    Description: ARN of the IAM Role to assign to monitored Lambda functions
     Value: !GetAtt LambdaObservabilityRole.Arn
-    Export:
-      Name: !Sub "${AWS::StackName}-LambdaObservabilityRoleArn"
-
   StepFunctionsObservabilityRoleArn:
-    Description: ARN of the IAM Role to assign to monitored Step Functions
     Value: !GetAtt StepFunctionsObservabilityRole.Arn
-    Export:
-      Name: !Sub "${AWS::StackName}-StepFunctionsObservabilityRoleArn"
 
-  LambdaLogGroupName:
-    Description: CloudWatch Log Group for Lambda observability
-    Value: !Ref LambdaLogGroup
-    Export:
-      Name: !Sub "${AWS::StackName}-LambdaLogGroupName"
-
-  StepFunctionsLogGroupName:
-    Description: CloudWatch Log Group for Step Functions observability
-    Value: !Ref StepFunctionsLogGroup
-    Export:
-      Name: !Sub "${AWS::StackName}-StepFunctionsLogGroupName"
+    
