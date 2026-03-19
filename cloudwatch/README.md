@@ -16,9 +16,9 @@
 
 | Role | Purpose |
 |---|---|
-| `LambdaObservabilityRole` | Assign to your Lambda functions. Grants CloudWatch Logs, X-Ray, and custom metrics **write** access. |
+| `LambdaObservabilityRole` | Assign to your Lambda functions. Grants CloudWatch Logs, X-Ray, and custom metrics write access. |
 | `StepFunctionsObservabilityRole` | Assign to your State Machines. Grants log delivery and X-Ray tracing permissions. |
-| `CloudWatchReadOnlyRole` | For ops/dev team members to **view** dashboards and alarms without write access. |
+| `CloudWatchReadOnlyRole` | For ops/dev team members to view dashboards and alarms without write access. |
 
 ---
 
@@ -26,7 +26,7 @@
 
 **Lambda**
 - `Lambda-Errors` — triggers when error count ≥ threshold (default: 1)
-- `Lambda-Throttles` — triggers when throttle count ≥ threshold (default: 5)
+- `Lambda-Throttles` — triggers when throttle count ≥ threshold (default: 3)
 - `Lambda-HighDuration` — triggers when P99 duration exceeds 10,000 ms
 
 **Step Functions**
@@ -43,9 +43,9 @@
 - **Metric Filters (2)** — scan logs for `ERROR|Exception|exception` patterns and `Task timed out` strings, publishing custom metrics to `Custom/Lambda/{env}`.
 - **CloudWatch Dashboard** — `CloudWatch-Lambdas-{env}` with panels for:
   - Lambda: Invocations, Errors, Throttles, Duration (Avg + P99), Concurrent Executions
-  - Step Functions: Started, Succeeded, Failed/TimedOut/Throttled, Execution Duration
+  - Step Functions: Succeeded vs Failed executions
   - Alarm status widget for at-a-glance health
-  - Live Log Insights query panel showing the last 50 errors
+  - Live Log Insights query panel showing the last 20 errors
 
 ---
 
@@ -61,13 +61,13 @@
 
 | Parameter | Description | Default |
 |---|---|---|
-| `AlertEmail` | Email to receive alarm notifications | `ops-team@example.com` |
-| `LambdaFunctionNames` | Comma-separated Lambda function names | `my-lambda-1,my-lambda-2` |
+| `AlertEmail` | Email to receive alarm notifications | `lior.milliger@polustech.com` |
+| `LambdaFunctionNames` | Comma-separated Lambda function names | `3-tier-data-digestion-identifier,…` |
 | `StepFunctionArns` | Comma-separated State Machine ARNs | *(example ARN)* |
 | `ErrorAlarmThreshold` | Lambda error count to trigger alarm | `1` |
-| `ThrottleAlarmThreshold` | Lambda throttle count to trigger alarm | `5` |
+| `ThrottleAlarmThreshold` | Lambda throttle count to trigger alarm | `3` |
 | `LogRetentionDays` | Days to retain CloudWatch logs | `30` |
-| `Environment` | Deployment environment tag | `production` |
+| `Environment` | Deployment environment tag | `development` |
 
 ---
 
@@ -81,18 +81,19 @@ aws cloudformation deploy \
       AlertEmail=your@email.com \
       Environment=production \
       LambdaFunctionNames=my-lambda-1,my-lambda-2 \
+      StepFunctionArns=arn:aws:states:us-east-1:123456789012:stateMachine:my-pipeline \
       ErrorAlarmThreshold=1 \
-      ThrottleAlarmThreshold=5 \
+      ThrottleAlarmThreshold=3 \
       LogRetentionDays=30 \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-east-1
 ```
 
-> After deploying, check your email inbox and **confirm the SNS subscription** to start receiving alarm notifications.
+> After deploying, check your email inbox and **confirm the SNS subscription** to start receiving alarm notifications. Alarms will not notify until this step is completed.
 
 ---
 
-## After Deploying — Attach Roles
+## After Deploying — Attach Roles & Enable Tracing
 
 Once the stack is deployed, retrieve the role ARNs from the stack outputs and attach them to your existing resources.
 
@@ -105,7 +106,7 @@ aws cloudformation describe-stacks \
   --region us-east-1
 ```
 
-### Attach role to a Lambda function
+### Attach the observability role to a Lambda function
 ```bash
 aws lambda update-function-configuration \
   --function-name YOUR_LAMBDA_NAME \
@@ -125,11 +126,13 @@ aws lambda update-function-configuration \
   --region us-east-1
 ```
 
-### Enable X-Ray tracing on a Step Function
+### Enable X-Ray tracing and logging on a Step Function
 ```bash
 aws stepfunctions update-state-machine \
   --state-machine-arn YOUR_STATE_MACHINE_ARN \
   --tracing-configuration enabled=true \
+  --logging-configuration \
+    level=ERROR,includeExecutionData=true,destinations=[{cloudWatchLogsLogGroup={logGroupArn=YOUR_LOG_GROUP_ARN}}] \
   --region us-east-1
 ```
 
@@ -138,7 +141,6 @@ aws stepfunctions update-state-machine \
 ## View the Dashboard
 
 ```bash
-# Print the dashboard URL directly
 aws cloudformation describe-stacks \
   --stack-name cloudwatch-lambdas \
   --query "Stacks[0].Outputs[?OutputKey=='DashboardUrl'].OutputValue" \
@@ -147,7 +149,7 @@ aws cloudformation describe-stacks \
 ```
 
 Or open the AWS Console and navigate to:
-**CloudWatch → Dashboards → CloudWatch-Lambdas-production**
+**CloudWatch → Dashboards → CloudWatch-Lambdas-{env}**
 
 ---
 
@@ -160,7 +162,6 @@ aws cloudformation delete-stack \
   --stack-name cloudwatch-lambdas \
   --region us-east-1
 
-# Wait for deletion to complete
 aws cloudformation wait stack-delete-complete \
   --stack-name cloudwatch-lambdas \
   --region us-east-1
@@ -172,7 +173,7 @@ echo "Stack deleted successfully."
 ```bash
 aws cloudformation describe-stacks \
   --stack-name cloudwatch-lambdas \
-  --region us-east-1 2>&1 | grep -c "does not exist" \
+  --region us-east-1 2>&1 | grep "does not exist" \
   && echo "Confirmed: stack no longer exists."
 ```
 
@@ -183,11 +184,8 @@ aws cloudformation describe-stacks \
 | Output Key | Description |
 |---|---|
 | `DashboardUrl` | Direct URL to the CloudWatch Dashboard |
-| `AlertingSnsTopicArn` | ARN of the SNS alerting topic |
 | `LambdaObservabilityRoleArn` | Role ARN to attach to Lambda functions |
 | `StepFunctionsObservabilityRoleArn` | Role ARN to attach to State Machines |
-| `LambdaLogGroupName` | CloudWatch Log Group name for Lambdas |
-| `StepFunctionsLogGroupName` | CloudWatch Log Group name for Step Functions |
 
 ---
 
@@ -212,9 +210,10 @@ All resources in this stack fall within the **AWS Free Tier** for most workloads
 
 ```
 .
-├── README.md                              # This file
-├── cloudwatch-lambdas.yaml                # CloudFormation template
-└── cloudwatch-lambdas-architecture.png   # Architecture diagram
+├── README.md                         # This file
+├── cloudwatch-lambdas.yaml           # CloudFormation template
+├── executables.sh                    # Step-by-step CLI reference
+└── cloudwatch-lambdas-architecture.png
 ```
 
 ---
