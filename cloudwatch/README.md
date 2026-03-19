@@ -6,7 +6,7 @@
 
 ## Architecture
 
-![CloudWatch Lambdas Architecture](cloudwatch-lambdas-architecture.png)
+![CloudWatch Lambdas Architecture](cloudwatch-architecture.png)
 
 ---
 
